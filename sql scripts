@@ -1,0 +1,163 @@
+CREATE TABLE Customers (
+    CustomerID INT PRIMARY KEY,
+    Name VARCHAR(100),
+    Email VARCHAR(100),
+    Address VARCHAR(255)
+);
+
+CREATE TABLE Products (
+    ProductID INT PRIMARY KEY,
+    Name VARCHAR(100),
+    Category VARCHAR(50),
+    Price DECIMAL(10, 2)
+);
+
+CREATE TABLE Stores (
+    StoreID INT PRIMARY KEY,
+    Location VARCHAR(100),
+    Manager VARCHAR(100),
+    OpenHours VARCHAR(50)
+);
+
+CREATE TABLE Agents (
+    AgentID INT PRIMARY KEY,
+    Name VARCHAR(100),
+    Department VARCHAR(50),
+    Shift VARCHAR(50)
+);
+
+CREATE TABLE OnlineTransactions (
+    OrderID INT PRIMARY KEY,
+    CustomerID INT,
+    ProductID INT,
+    DateTime DATETIME,
+    PaymentMethod VARCHAR(50),
+    Amount DECIMAL(10, 2),
+    Status VARCHAR(20),
+    FOREIGN KEY (CustomerID) REFERENCES Customers(CustomerID),
+    FOREIGN KEY (ProductID) REFERENCES Products(ProductID)
+);
+
+CREATE TABLE InStoreTransactions (
+    TransactionID INT PRIMARY KEY,
+    CustomerID INT,
+    StoreID INT,
+    DateTime DATETIME,
+    Amount DECIMAL(10, 2),
+    PaymentMethod VARCHAR(50),
+    FOREIGN KEY (CustomerID) REFERENCES Customers(CustomerID),
+    FOREIGN KEY (StoreID) REFERENCES Stores(StoreID)
+);
+
+CREATE TABLE CustomerServiceInteractions (
+    InteractionID INT PRIMARY KEY,
+    CustomerID INT,
+    DateTime DATETIME,
+    AgentID INT,
+    IssueType VARCHAR(50),
+    ResolutionStatus VARCHAR(50),
+    FOREIGN KEY (CustomerID) REFERENCES Customers(CustomerID),
+    FOREIGN KEY (AgentID) REFERENCES Agents(AgentID)
+);
+
+CREATE TABLE LoyaltyAccounts (
+    LoyaltyID INT PRIMARY KEY,
+    CustomerID INT,
+    PointsEarned INT,
+    TierLevel VARCHAR(20),
+    JoinDate DATE,
+    FOREIGN KEY (CustomerID) REFERENCES Customers(CustomerID)
+);
+
+CREATE TABLE LoyaltyTransactions (
+    LoyaltyID INT,
+    DateTime DATETIME,
+    PointsChange INT,
+    Reason VARCHAR(100),
+    PRIMARY KEY (LoyaltyID, DateTime),
+    FOREIGN KEY (LoyaltyID) REFERENCES LoyaltyAccounts(LoyaltyID)
+);
+----view one
+CREATE VIEW vw1_AverageOrderValue AS
+SELECT 
+    P.ProductID,
+    P.Category,
+    'Online' AS Location,
+    SUM(O.Amount) * 1.0 / COUNT(O.OrderID) AS AverageOrderValue
+FROM OnlineTransactions O
+JOIN Products P ON O.ProductID = P.ProductID
+GROUP BY P.ProductID, P.Category
+UNION ALL
+SELECT 
+    NULL AS ProductID,
+    NULL AS Category,
+    S.Location,
+    SUM(I.Amount) * 1.0 / COUNT(I.TransactionID) AS AverageOrderValue
+FROM InStoreTransactions I
+JOIN Stores S ON I.StoreID = S.StoreID
+GROUP BY S.Location;
+
+select * from vw1_AverageOrderValue
+----------view 2
+CREATE VIEW vw2_CustomerSegments AS
+WITH CustomerStats AS (
+    SELECT 
+        C.CustomerID,
+        COUNT(DISTINCT O.OrderID) + COUNT(DISTINCT I.TransactionID) AS PurchaseFrequency,
+        ISNULL(SUM(O.Amount), 0) + ISNULL(SUM(I.Amount), 0) AS TotalSpend,
+        L.TierLevel
+    FROM Customers C
+    LEFT JOIN OnlineTransactions O ON C.CustomerID = O.CustomerID
+    LEFT JOIN InStoreTransactions I ON C.CustomerID = I.CustomerID
+    LEFT JOIN LoyaltyAccounts L ON C.CustomerID = L.CustomerID
+    GROUP BY C.CustomerID, L.TierLevel
+),
+Ranked AS (
+    SELECT *,
+           NTILE(10) OVER (ORDER BY TotalSpend DESC) AS SpendRank
+    FROM CustomerStats
+)
+SELECT *,
+       CASE 
+           WHEN SpendRank = 1 THEN 'High-Value Customer'
+           WHEN PurchaseFrequency = 1 THEN 'One-Time Buyer'
+           WHEN TierLevel IN ('Gold', 'Platinum') THEN 'Loyalty Champion'
+           ELSE 'Regular Customer'
+       END AS CustomerSegment
+FROM Ranked;
+
+select * from vw2_CustomerSegments
+--------------------view 3
+CREATE VIEW vw3_PeakShoppingTimes AS
+SELECT 
+    'Online' AS Channel,
+    DATENAME(WEEKDAY, DateTime) AS DayOfWeek,
+    DATEPART(HOUR, DateTime) AS HourOfDay,
+    COUNT(OrderID) AS OrderCount
+FROM OnlineTransactions
+GROUP BY DATENAME(WEEKDAY, DateTime), DATEPART(HOUR, DateTime)
+
+UNION ALL
+
+SELECT 
+    'In-Store' AS Channel,
+    DATENAME(WEEKDAY, DateTime),
+    DATEPART(HOUR, DateTime),
+    COUNT(TransactionID)
+FROM InStoreTransactions
+GROUP BY DATENAME(WEEKDAY, DateTime), DATEPART(HOUR, DateTime);
+
+select * from vw3_PeakShoppingTimes
+------------------view 4
+CREATE VIEW vw4_AgentPerformance AS
+SELECT 
+    A.AgentID,
+    A.Name,
+    COUNT(CSI.InteractionID) AS TotalInteractions,
+    CAST(SUM(CASE WHEN CSI.ResolutionStatus = 'Resolved' THEN 1 ELSE 0 END) AS FLOAT) 
+        / NULLIF(COUNT(CSI.InteractionID), 0) AS ResolutionSuccessRate
+FROM Agents A
+JOIN CustomerServiceInteractions CSI ON A.AgentID = CSI.AgentID
+GROUP BY A.AgentID, A.Name;
+
+select * from vw4_AgentPerformance
